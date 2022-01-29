@@ -24,6 +24,7 @@ import requests
 import sys
 import boto3
 from docopt import docopt
+import os
 
 """
 today, tomorrow, M-Sun, next week, tonight
@@ -182,19 +183,8 @@ def get_default_stack_id():
     return 'CdkReminders'
 
 def get_client_credentials():
-    cloudformation = boto3.resource('cloudformation')
-    stack_id = ''  # input('stack id?: ')
-    default_stack_id = get_default_stack_id()
-    if stack_id == '':
-        stack_id = default_stack_id
-    stack = cloudformation.Stack(stack_id)
-    outputs = stack.outputs
-    api_gateway_output = [output for output in outputs if output['OutputKey'] == 'ReminderApi'][0]
-    url = api_gateway_output['OutputValue']
-    #url =  f'https://{api_id}.execute-api.us-east-1.amazonaws.com/prod/'
-    api_key_output = [
-        output for output in outputs if output['OutputKey'] == 'APIKeyValue'][0]
-    api_key = api_key_output['OutputValue']
+    url = os.popen('terraform output url').read().rstrip().strip('"')
+    api_key = None
     timezone = 'US/Eastern'
     return url, api_key, timezone
 

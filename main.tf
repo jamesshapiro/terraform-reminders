@@ -62,10 +62,16 @@ resource "aws_lambda_function" "create_reminder" {
   s3_key    = aws_s3_bucket_object.archive.key
 
   runtime = "python3.8"
-  handler = "functions.create_reminder"
+  handler = "create_reminder.lambda_handler"
   layers = [aws_lambda_layer_version.ulid_layer.arn]
 
   source_code_hash = data.archive_file.archive.output_base64sha256
+
+  environment {
+    variables = {
+      REMINDERS_DDB_TABLE = aws_dynamodb_table.reminder_table.name
+    }
+  }
 
   role = aws_iam_role.lambda_exec.arn
 }
@@ -161,6 +167,24 @@ resource "aws_api_gateway_integration" "integration" {
   integration_http_method = "POST"
   type                    = "AWS_PROXY"
   uri                     = aws_lambda_function.create_reminder.invoke_arn
+}
+
+resource "aws_api_gateway_deployment" "deployment" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+
+  triggers = {
+    redeployment = sha1(jsonencode(aws_api_gateway_rest_api.api.body))
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "aws_api_gateway_stage" "prod" {
+  deployment_id = aws_api_gateway_deployment.deployment.id
+  rest_api_id   = aws_api_gateway_rest_api.api.id
+  stage_name    = "prod"
 }
 
 # Lambda
