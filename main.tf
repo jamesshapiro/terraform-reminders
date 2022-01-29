@@ -66,6 +66,7 @@ resource "aws_lambda_function" "create_reminder" {
   layers = [aws_lambda_layer_version.ulid_layer.arn]
 
   source_code_hash = data.archive_file.archive.output_base64sha256
+  timeout = 30
 
   environment {
     variables = {
@@ -73,7 +74,31 @@ resource "aws_lambda_function" "create_reminder" {
     }
   }
 
-  role = aws_iam_role.lambda_exec.arn
+  role = aws_iam_role.create_reminder_lambda_exec.arn
+}
+
+resource "aws_lambda_function" "send_reminders" {
+  function_name = "terraform-send-reminders"
+
+  s3_bucket = aws_s3_bucket.lambda_bucket.id
+  s3_key    = aws_s3_bucket_object.archive.key
+
+  runtime = "python3.8"
+  handler = "send_reminders.lambda_handler"
+  layers = [aws_lambda_layer_version.ulid_layer.arn]
+
+  source_code_hash = data.archive_file.archive.output_base64sha256
+  timeout = 30
+
+  environment {
+    variables = {
+      REMINDERS_DDB_TABLE = aws_dynamodb_table.reminder_table.name
+      REMINDERS_TOPIC = aws_sns_topic.topic.arn
+      REMINDERS_PHONE_NUMBER = var.notification_phone_number
+    }
+  }
+
+  role = aws_iam_role.send_reminders_lambda_exec.arn
 }
 
 resource "aws_dynamodb_table" "reminder_table" {
@@ -98,8 +123,8 @@ resource "aws_cloudwatch_log_group" "create_reminder_logs" {
   retention_in_days = 30
 }
 
-resource "aws_iam_role" "lambda_exec" {
-  name = "terraform_reminders_lambda"
+resource "aws_iam_role" "create_reminder_lambda_exec" {
+  name = "terraform_create_reminder_lambda"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -115,8 +140,25 @@ resource "aws_iam_role" "lambda_exec" {
   })
 }
 
-resource "aws_iam_policy" "ddb_write_permissions" {
-  name        = "terraform_reminders_ddb_write_permissions"
+resource "aws_iam_role" "send_reminders_lambda_exec" {
+  name = "terraform_send_reminders_lambda"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action = "sts:AssumeRole"
+      Effect = "Allow"
+      Sid    = ""
+      Principal = {
+        Service = "lambda.amazonaws.com"
+      }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_policy" "create_reminder_permissions" {
+  name        = "terraform_create_reminder_permissions"
   description = "Allow Lambda to write to DDB"
 
   policy = jsonencode({
@@ -133,14 +175,54 @@ resource "aws_iam_policy" "ddb_write_permissions" {
   })
 }
 
-resource "aws_iam_role_policy_attachment" "lambda_policy" {
-  role       = aws_iam_role.lambda_exec.name
+resource "aws_iam_policy" "send_reminders_permissions" {
+  name        = "terraform_send_reminders_permissions"
+  description = "Allow Lambda to send reminders"
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Action = [
+          "dynamodb:BatchGet*",
+          "dynamodb:Get*",
+          "dynamodb:Query",
+          "dynamodb:Scan",
+          "dynamodb:CreateTable",
+          "dynamodb:Delete*"
+        ]
+        Effect = "Allow"
+        Resource = aws_dynamodb_table.reminder_table.arn
+      },
+      {
+        Action = [
+          "sns:Publish"
+        ]
+        Effect = "Allow"
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "lambda_policy_attachment_1" {
+  role       = aws_iam_role.create_reminder_lambda_exec.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
-resource "aws_iam_role_policy_attachment" "lambda_ddb_write_policy" {
-  role       = aws_iam_role.lambda_exec.name
-  policy_arn = aws_iam_policy.ddb_write_permissions.arn
+resource "aws_iam_role_policy_attachment" "lambda_policy_attachment_2" {
+  role       = aws_iam_role.create_reminder_lambda_exec.name
+  policy_arn = aws_iam_policy.create_reminder_permissions.arn
+}
+
+resource "aws_iam_role_policy_attachment" "lambda_policy_attachment_3" {
+  role       = aws_iam_role.send_reminders_lambda_exec.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+resource "aws_iam_role_policy_attachment" "lambda_policy_attachment_4" {
+  role       = aws_iam_role.send_reminders_lambda_exec.name
+  policy_arn = aws_iam_policy.send_reminders_permissions.arn
 }
 
 resource "aws_api_gateway_rest_api" "api" {
@@ -220,4 +302,36 @@ resource "aws_api_gateway_usage_plan_key" "usage_plan_key" {
   key_id        = aws_api_gateway_api_key.reminders_key.id
   key_type      = "API_KEY"
   usage_plan_id = aws_api_gateway_usage_plan.usage_plan.id
+}
+
+resource "aws_sns_topic" "topic" {
+  name = "terraform-reminders"
+}
+
+resource "aws_sns_topic_subscription" "subscription" {
+  topic_arn = aws_sns_topic.topic.arn
+  protocol  = "email"
+  endpoint  = var.notification_email
+}
+
+resource "aws_cloudwatch_event_rule" "rule" {
+  name                = "terraform-send-reminders"
+  description         = "Check for new reminders every minute and send any past due"
+  schedule_expression = "rate(1 minute)"
+  is_enabled          = true
+}
+
+resource "aws_cloudwatch_event_target" "lambda" {
+  rule      = aws_cloudwatch_event_rule.rule.name
+  target_id = "terraform_send_reminders"
+  arn       = aws_lambda_function.send_reminders.arn
+  input     = "{}"
+}
+
+resource "aws_lambda_permission" "allow_cloudwatch_to_call_send_reminders" {
+    statement_id = "AllowExecutionFromCloudWatch"
+    action = "lambda:InvokeFunction"
+    function_name = "${aws_lambda_function.send_reminders.function_name}"
+    principal = "events.amazonaws.com"
+    source_arn = "${aws_cloudwatch_event_rule.rule.arn}"
 }
