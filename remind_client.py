@@ -184,7 +184,7 @@ def get_default_stack_id():
 
 def get_client_credentials():
     url = os.popen('terraform output url').read().rstrip().strip('"')
-    api_key = None
+    api_key = os.popen('terraform output api_key').read().rstrip().strip('"')
     timezone = 'US/Eastern'
     return url, api_key, timezone
 
@@ -192,6 +192,7 @@ def get_client_credentials():
 if __name__ == '__main__':
     arguments = docopt(__doc__, version='Reminders 0.1')
     url, api_key, timezone = get_client_credentials()
+    #print(f'{api_key=}')
     reminder = arguments['REMINDER']
     midnight = get_midnight(timezone)
     time = parse_time(arguments['TIME'], midnight)

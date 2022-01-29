@@ -154,10 +154,11 @@ resource "aws_api_gateway_resource" "resource" {
 }
 
 resource "aws_api_gateway_method" "method" {
-  authorization = "NONE"
-  http_method   = "POST"
-  resource_id   = aws_api_gateway_resource.resource.id
-  rest_api_id   = aws_api_gateway_rest_api.api.id
+  authorization    = "NONE"
+  http_method      = "POST"
+  api_key_required = true
+  resource_id      = aws_api_gateway_resource.resource.id
+  rest_api_id      = aws_api_gateway_rest_api.api.id
 }
 
 resource "aws_api_gateway_integration" "integration" {
@@ -201,11 +202,22 @@ resource "aws_cloudwatch_log_group" "api_gw" {
   retention_in_days = 30
 }
 
-# resource "aws_lambda_permission" "api_gw" {
-#   statement_id  = "AllowExecutionFromAPIGateway"
-#   action        = "lambda:InvokeFunction"
-#   function_name = aws_lambda_function.upload_reminder.function_name
-#   principal     = "apigateway.amazonaws.com"
+resource "aws_api_gateway_api_key" "reminders_key" {
+  name = "terraform-reminders-key"
+}
 
-#   source_arn = "${aws_apigatewayv2_api.upload_reminder.execution_arn}/*/*"
-# }
+resource "aws_api_gateway_usage_plan" "usage_plan" {
+  name         = "terraform-reminders-usage-plan"
+  description  = "Terraform reminders usage plan"
+
+  api_stages {
+    api_id = aws_api_gateway_rest_api.api.id
+    stage  = aws_api_gateway_stage.prod.stage_name
+  }
+}
+
+resource "aws_api_gateway_usage_plan_key" "usage_plan_key" {
+  key_id        = aws_api_gateway_api_key.reminders_key.id
+  key_type      = "API_KEY"
+  usage_plan_id = aws_api_gateway_usage_plan.usage_plan.id
+}

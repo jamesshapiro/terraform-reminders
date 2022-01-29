@@ -15,3 +15,9 @@ output "url" {
   description = "API Gateway endpoint."
   value = "${aws_api_gateway_stage.prod.invoke_url}${aws_api_gateway_resource.resource.path}"
 }
+
+output "api_key" {
+  description = "API Key Value"
+  value = aws_api_gateway_api_key.reminders_key.value
+  sensitive = true
+}
